@@ -3,19 +3,6 @@
 	"EngineAssociation": "5.7",
 	"Category": "",
 	"Description": "",
-	"Modules": [
-		{
-			"Name": "NightSkyEngineDemo",
-			"Type": "Runtime",
-			"LoadingPhase": "Default",
-			"AdditionalDependencies": [
-				"Engine",
-				"CoreUObject",
-				"NightSkyEngine",
-				"GGPOUE4"
-			]
-		}
-	],
 	"Plugins": [
 		{
 			"Name": "ModelingToolsEditorMode",
@@ -37,10 +24,10 @@
 				"Linux",
 				"Mac"
 			]
+		},
+		{
+			"Name": "ActorModifier",
+			"Enabled": true
 		}
-	],
-	"TargetPlatforms": [],
-	"AdditionalRootDirectories": [],
-	"AdditionalPluginDirectories": [],
-	"EpicSampleNameHash": ""
+	]
 }
