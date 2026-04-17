@@ -141,6 +141,13 @@ void APlayerObject::BeginPlay()
 	}
 
 	InitPlayer();
+	
+	TInlineComponentArray<UPrimitiveComponent*> Components;
+	GetComponents(Components);
+	for (const auto& Component : Components)
+	{
+		Component->AddTickPrerequisiteActor(this);
+	}
 }
 
 void APlayerObject::HandleLanding()
@@ -207,6 +214,13 @@ void APlayerObject::InitPlayer()
 		for (auto SubroutineClass : CommonSubroutineData->SubroutineArray)
 		{
 			if (!IsValid(SubroutineClass)) continue;
+			
+			if (Cast<USubroutine>(SubroutineClass->GetSuperClass()->ClassDefaultObject)->Name != FGameplayTag::EmptyTag)
+			{
+				UE_LOGFMT(LogTemp, Error, "Subroutine class '{0}' inherits from non-generic subroutine '{1}'!", 
+					SubroutineClass->GetName(), SubroutineClass->GetSuperClass()->GetName());
+			}
+			
 			auto Subroutine = NewObject<USubroutine>(this, SubroutineClass);
 			AddSubroutine(Subroutine->Name, Subroutine, true);
 		}
@@ -216,6 +230,13 @@ void APlayerObject::InitPlayer()
 		for (auto SubroutineClass : CharaSubroutineData->SubroutineArray)
 		{
 			if (!IsValid(SubroutineClass)) continue;
+			
+			if (Cast<USubroutine>(SubroutineClass->GetSuperClass()->ClassDefaultObject)->Name != FGameplayTag::EmptyTag)
+			{
+				UE_LOGFMT(LogTemp, Error, "Subroutine class '{0}' inherits from non-generic subroutine '{1}'!", 
+					SubroutineClass->GetName(), SubroutineClass->GetSuperClass()->GetName());
+			}
+
 			auto Subroutine = NewObject<USubroutine>(this, SubroutineClass);
 			AddSubroutine(Subroutine->Name, Subroutine, false);
 		}
@@ -671,6 +692,19 @@ void APlayerObject::Update()
 	if (AirDashNoAttackTime == 1)
 		EnableAttacks();
 
+	if (PrimaryStateMachine.CurrentState->StateType == EStateType::Hitstun)
+	{
+		if (GetCurrentStateName(StateMachine_Primary) == State_Universal_FaceDownBounce
+			|| GetCurrentStateName(StateMachine_Primary) == State_Universal_FaceUpBounce)
+		{
+			if (ReceivedHit.GroundBounce.GroundBounceCount > 0 && ActionTime == 3)
+			{
+				HandleGroundBounce();
+				return;
+			}
+		}
+	}
+
 	if (StunTime > 0)
 		StunTime--;
 	if (StunTime <= 0 && !(PlayerFlags & PLF_IsDead) && CheckIsStunned())
@@ -711,16 +745,22 @@ void APlayerObject::Update()
 		}
 		else
 		{
-			if (((PlayerFlags & PLF_IsKnockedDown) == 0 || (PlayerFlags & PLF_IsHardKnockedDown) == 0) && (PlayerFlags &
-				PLF_IsDead) == 0)
-				EnableState(ENB_Tech, StateMachine_Primary);
+			if ((PlayerFlags & PLF_IsDead) == 0)
+			{
+				if ((PlayerFlags & PLF_IsKnockedDown) == 0)
+					EnableState(ENB_Tech, StateMachine_Primary);
+				else if ((PlayerFlags & PLF_IsHardKnockedDown) == 0 && ActionTime == 4)
+				{
+					EnableState(ENB_Tech, StateMachine_Primary);
+				}
+			}
 		}
 	}
 
 	if (PlayerFlags & PLF_TouchingWall && Enemy->PrimaryStateMachine.CurrentState->StateType != EStateType::Hitstun &&
 		Pushback != 0)
 	{
-		if (IsValid(AttackOwner))
+		if (IsValid(AttackOwner) && AttackOwner->IsPlayer && AttackOwner->Player->Stance != EActionStance::ACT_Jumping)
 			AttackOwner->Pushback = Pushback;
 		Pushback = 0;
 	}
@@ -788,16 +828,8 @@ void APlayerObject::Update()
 	}
 
 	TriggerEvent(EVT_Update, StateMachine_Primary);
+	
 	UpdateCel();
-
-	if (PrimaryStateMachine.CurrentState->StateType == EStateType::Hitstun)
-	{
-		if (GetCurrentStateName(StateMachine_Primary) == State_Universal_FaceDownBounce
-			|| GetCurrentStateName(StateMachine_Primary) == State_Universal_FaceUpBounce)
-		{
-			if (ReceivedHit.GroundBounce.GroundBounceCount > 0) HandleGroundBounce();
-		}
-	}
 
 	for (auto& Gauge : ExtraGauges)
 	{
@@ -1659,6 +1691,12 @@ bool APlayerObject::IsMainPlayer() const
 	return this == GameState->GetMainPlayer(PlayerIndex == 0);
 }
 
+APlayerObject* APlayerObject::GetMainPlayer() const
+{
+	if (!GameState) return nullptr;
+	return GameState->GetMainPlayer(PlayerIndex == 0);
+}
+
 bool APlayerObject::IsOnScreen() const
 {
 	return (PlayerFlags & PLF_IsOnScreen) == PLF_IsOnScreen;
@@ -1773,6 +1811,13 @@ EBlockType APlayerObject::GetAttackBlockType() const
 {
 	return HitCommon.BlockType;
 }
+
+#if WITH_EDITOR
+void APlayerObject::WriteInputCondition(FInputCondition& Condition)
+{
+	StoredInputBuffer.WriteInputCondition(Condition);
+}
+#endif
 
 bool APlayerObject::IsCorrectBlock(EBlockType BlockType)
 {
@@ -2120,7 +2165,7 @@ bool APlayerObject::HandleStateCondition(EStateCondition StateCondition) const
 
 bool APlayerObject::FindChainCancelOption(const FGameplayTag Name, FStateMachine& StateMachine)
 {
-	if (AttackFlags & ATK_HasHit && AttackFlags & ATK_IsAttacking && CancelFlags & CNC_ChainCancelEnabled)
+	if (AttackFlags & ATK_HasHit && CancelFlags & CNC_ChainCancelEnabled)
 	{
 		if (CheckReverseBeat(Name, StateMachine))
 			return true;
@@ -2199,8 +2244,10 @@ bool APlayerObject::CheckMovesUsedInChain(const FGameplayTag Name, FStateMachine
 			return false;
 		}
 	}
-	
-	auto State = StateMachine.States[StateMachine.GetStateIndex(Name)];
+
+	const auto StateIndex = StateMachine.GetStateIndex(Name);
+	if (StateIndex == INDEX_NONE) return false;
+	const auto State = StateMachine.States[StateIndex];
 	
 	if (Usages < State->MaxChain || State->MaxChain == -1)
 	{
@@ -2322,11 +2369,11 @@ void APlayerObject::HandleWallBounce()
 {
 	if (ReceivedHit.WallBounce.WallBounceInCornerOnly)
 	{
-		if (PlayerFlags & PLF_TouchingWall && 
-			GameState->BattleState.ScreenData.ScreenWorldCenterX + GameState->BattleState.ScreenData.ScreenWorldWidth / 2
+		if ((PlayerFlags & PLF_TouchingWall) && 
+			(GameState->BattleState.ScreenData.ScreenWorldCenterX + GameState->BattleState.ScreenData.ScreenWorldWidth / 2
 			>= GameState->BattleState.ScreenData.StageBoundsRight ||
 			GameState->BattleState.ScreenData.ScreenWorldCenterX - GameState->BattleState.ScreenData.ScreenWorldWidth / 2
-			<= GameState->BattleState.ScreenData.StageBoundsLeft)
+			<= GameState->BattleState.ScreenData.StageBoundsLeft))
 		{
 			if (ReceivedHit.WallBounce.WallBounceCount > 0)
 			{
@@ -2441,8 +2488,6 @@ void APlayerObject::HandleGroundBounce()
 	}
 
 	Hitstop = ReceivedHit.GroundBounce.GroundBounceStop;
-	PlayerFlags &= ~PLF_IsKnockedDown;
-	HandleBufferedState(PrimaryStateMachine);
 }
 
 void APlayerObject::SetComponentVisibility() const
@@ -2669,6 +2714,11 @@ FStateMachine& APlayerObject::GetStateMachine(FGameplayTag StateMachineName)
 		          ("Name", StateMachineName.ToString()));
 	}
 	return PrimaryStateMachine;
+}
+
+EStateType APlayerObject::GetStateType() const
+{
+	return PrimaryStateMachine.CurrentState->StateType;
 }
 
 bool APlayerObject::CheckStateEnabled(EStateType StateType, FGameplayTag CustomStateType, FGameplayTag StateMachineName)
@@ -2914,7 +2964,6 @@ void APlayerObject::PostStateChange()
 
 void APlayerObject::RoundInit(bool ResetHealth)
 {
-	OrthoBlendActive = 1;
 	StoredInputBuffer = FInputBuffer();
 	if (PlayerIndex == 0)
 	{
@@ -3134,6 +3183,7 @@ void APlayerObject::RoundInit(bool ResetHealth)
 		SetFacing(DIR_Left);
 	}
 	RoundInit_BP();
+	ClearInputBuffer();
 
 	CallSubroutine(Subroutine_Cmn_RoundInit);
 	CallSubroutine(Subroutine_RoundInit);
@@ -3282,6 +3332,11 @@ void APlayerObject::DisableAll(FGameplayTag StateMachineName)
 bool APlayerObject::CheckInput(const FInputCondition& Input)
 {
 	return StoredInputBuffer.CheckInputCondition(Input);
+}
+
+void APlayerObject::ClearInputBuffer()
+{
+	StoredInputBuffer.ResetBuffer();
 }
 
 bool APlayerObject::CheckIsAttacking() const
@@ -3534,9 +3589,8 @@ void APlayerObject::SetKnockdownState()
 {
 	StunTime = 0;
 	StunTimeMax = 0;
-	PlayerFlags |= PLF_IsKnockedDown;
-	if ((PlayerFlags & PLF_IsHardKnockedDown) == 0 && !(PlayerFlags & PLF_IsDead))
-		EnableState(ENB_Tech, StateMachine_Primary);
+	if (ReceivedHit.GroundBounce.GroundBounceCount <= 0)
+		PlayerFlags |= PLF_IsKnockedDown;
 }
 
 bool APlayerObject::IsTouchingWall() const

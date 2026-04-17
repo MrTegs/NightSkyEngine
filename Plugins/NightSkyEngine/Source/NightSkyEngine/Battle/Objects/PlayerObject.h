@@ -69,7 +69,7 @@ struct FPlayerObjectLog : public FBattleObjectLog
 	GENERATED_BODY()
 	
 	//Starting from this until PlayerSyncEnd, everything is saved/loaded for rollback.
-	unsigned char PlayerSync;
+	uint32 PlayerSync;
 
 	/*
 	 * Default values
@@ -316,7 +316,7 @@ protected:
 
 public:
 	// Anything past here isn't saved or loaded for rollback, unless it has the SaveGame tag.
-	unsigned char PlayerSyncEnd;
+	uint32 PlayerSyncEnd;
 
 	virtual void LogForSyncTestFile(std::ofstream& file) override;
 };
@@ -333,7 +333,7 @@ public:
 	APlayerObject();
 
 	//Starting from this until PlayerSyncEnd, everything is saved/loaded for rollback.
-	unsigned char PlayerSync;
+	uint32 PlayerSync;
 
 	/*
 	 * Default values
@@ -580,7 +580,7 @@ protected:
 
 public:
 	// Anything past here isn't saved or loaded for rollback, unless it has the SaveGame tag.
-	unsigned char PlayerSyncEnd;
+	uint32 PlayerSyncEnd;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	bool bIsCpu = false;
@@ -843,6 +843,9 @@ public:
 	// Get state machine by name.
 	UFUNCTION(BlueprintPure)
 	FStateMachine& GetStateMachine(FGameplayTag StateMachineName);
+	//Gets the state type of the current state.
+	UFUNCTION(BlueprintPure)
+	EStateType GetStateType() const;
 	// Get enable flags.
 	UFUNCTION(BlueprintPure)
 	int32 GetEnableFlags(FGameplayTag StateMachineName);
@@ -878,6 +881,9 @@ public:
 	//checks input condition
 	UFUNCTION(BlueprintPure)
 	bool CheckInput(const FInputCondition& Input);
+	//clear input buffer
+	UFUNCTION(BlueprintCallable)
+	void ClearInputBuffer();
 	//is attacking
 	UFUNCTION(BlueprintPure)
 	bool CheckIsAttacking() const;
@@ -1046,6 +1052,8 @@ public:
 	UFUNCTION(BlueprintPure)
 	bool IsMainPlayer() const;
 	UFUNCTION(BlueprintPure)
+	APlayerObject* GetMainPlayer() const;
+	UFUNCTION(BlueprintPure)
 	bool IsOnScreen() const;
 	UFUNCTION(BlueprintCallable)
 	void SetOnScreen(bool OnScreen);
@@ -1063,10 +1071,15 @@ public:
 	bool IsEnemyThrow() const;
 	bool IsEnemyBlocking() const;
 	EBlockType GetAttackBlockType() const;
+#if WITH_EDITOR
+	UFUNCTION(BlueprintCallable)
+	void WriteInputCondition(FInputCondition& Condition);
+#endif
 };
 
 constexpr size_t SizeOfPlayerObject = offsetof(APlayerObject, PlayerSyncEnd) - offsetof(APlayerObject, PlayerSync);
 
-#if WITH_EDITOR
-static_assert(offsetof(FPlayerObjectLog, PlayerSyncEnd) - offsetof(FPlayerObjectLog, PlayerSync) == SizeOfPlayerObject, "FPlayerObjectLog must contain all members from ABattleObject between PlayerSync and PlayerSyncEnd");
+#if PLATFORM_WINDOWS && WITH_EDITOR
+static_assert(offsetof(FPlayerObjectLog, PlayerSyncEnd) - offsetof(FPlayerObjectLog, PlayerSync) == SizeOfPlayerObject, 
+			  "FPlayerObjectLog must contain all members from ABattleObject between PlayerSync and PlayerSyncEnd");
 #endif
